@@ -4,18 +4,19 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <ctype.h>
 
 # define N_CHAR 256
 
-// Initialize with null character
 char prev_command[N_CHAR] = {'\0'};  
 
-// Initialize all required words buffer
-char echo_trigger[] = "echo";
-char exit_trigger[] = "exit";
-char prev_trigger[] = "!!";
 char shell_comment[] = "##";
 const char delimiter[] = " ";
+int fg_pid = 0;
+int prev_exit_status = 0;
 
 int process_command(char command[], int script_mode) {
     char *token;
@@ -25,21 +26,27 @@ int process_command(char command[], int script_mode) {
     token = strtok(tmp, delimiter);
 
     if(token != NULL) {
-        if(!strcmp(token, echo_trigger)){
-            token = strtok(NULL, delimiter);
-            while(token != NULL) {
-                printf("%s ", token);
+        if(!strcmp(token, "echo")){
+            if(!strcmp(command, "echo $?")) {
+                printf("%d", prev_exit_status);
+            }
+            else {
                 token = strtok(NULL, delimiter);
+                while(token != NULL) {
+                    printf("%s ", token);
+                    token = strtok(NULL, delimiter);
+                }
             }
             printf("\n");
+            prev_exit_status = 1;
         } 
-        else if (!strcmp(token, exit_trigger)) {
+        else if (!strcmp(token, "exit")) {
             token = strtok(NULL, delimiter);
             long code = (int) strtol(token, NULL, 10);
             if(!script_mode) printf("Exiting program with code %ld\n", code);
             exit(code);
         } 
-        else if (!strcmp(token, prev_trigger)) { 
+        else if (!strcmp(token, "!!")) { 
             if(prev_command[0] != '\0'){
                 if(!script_mode) printf("%s\n", prev_command);
                 return process_command(prev_command, script_mode);
@@ -67,12 +74,14 @@ int process_command(char command[], int script_mode) {
                 return 1;
             }
             if (pid) {
-                waitpid(pid, NULL, 0);
+                fg_pid = pid;
+                waitpid(pid, &status, 0);
+                prev_exit_status = WEXITSTATUS(status);
+                fg_pid = 0;
             }
         }
         if(strcmp(prev_command, command)) strcpy(prev_command, command);
     }
-
     return 1;
 }
 
@@ -93,7 +102,35 @@ void read_file(char fileName[]) {
     }
 }
 
+void fg_handler() {
+    if(fg_pid != 0) {
+        kill(fg_pid, SIGINT);
+    }
+}
+
+void stop_handler() {
+    if(fg_pid != 0) {
+        kill(fg_pid, SIGTSTP);
+    }
+}
+
+void init_sas() {
+    struct sigaction sa, oldsa;
+    struct sigaction sh, oldsh;
+
+    sa.sa_handler = fg_handler;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, &oldsa);
+
+    sh.sa_handler = stop_handler;
+    sh.sa_flags = 0;
+    sigemptyset(&sh.sa_mask);
+    sigaction(SIGTSTP, &sh, &oldsh);
+}
+
 int main(int argc, char *argv[]) {
+    init_sas();
     char command[N_CHAR];
     char args[N_CHAR];
     
@@ -108,6 +145,5 @@ int main(int argc, char *argv[]) {
             run_command(command, 0);
         }
     }
-    
     return 0;
 }
