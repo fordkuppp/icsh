@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 # define N_CHAR 256
 
@@ -11,10 +12,10 @@ char prev_command[N_CHAR] = {'\0'};
 char echo_trigger[] = "echo";
 char exit_trigger[] = "exit";
 char prev_trigger[] = "!!";
+char shell_comment[] = "##";
 const char delimiter[] = " ";
 
-int process_command(char command[]) {
-    int run = 1;
+int process_command(char command[], int script_mode) {
     char *token;
     char *tmp = (char *) malloc(strlen(command) + 1);
 
@@ -33,13 +34,13 @@ int process_command(char command[]) {
         else if (!strcmp(token, exit_trigger)) {
             token = strtok(NULL, delimiter);
             long code = (int) strtol(token, NULL, 10);
-            printf("Exiting program with code %ld\n", code);
+            if(!script_mode) printf("Exiting program with code %ld\n", code);
             exit(code);
         } 
         else if (!strcmp(token, prev_trigger)) { 
             if(prev_command[0] != '\0'){
-                printf("%s\n", prev_command);
-                return process_command(prev_command);
+                if(!script_mode) printf("%s\n", prev_command);
+                return process_command(prev_command, script_mode);
             }  
         } 
         else {
@@ -48,26 +49,41 @@ int process_command(char command[]) {
         if(strcmp(prev_command, command)) strcpy(prev_command, command);
     }
 
-    return run;
+    return 1;
 }
 
-
-int run_command(char command[]) {
+int run_command(char command[], int script_mode) {
     command[strcspn(command, "\n")] = 0;
-    if(command[0] != 0) {
-        return process_command(command);
+    if(command[0] != 0 && strncmp(command, shell_comment, strlen(shell_comment))) {
+        return process_command(command, script_mode);
     }
     return 1;
 }
 
+void read_file(char fileName[]) {
+    FILE* file = fopen(fileName, "r");
+    char line[256];
+    while(fgets(line, sizeof(line), file)) {
+        run_command(line, 1);
+    }
+}
+
 int main(int argc, char *argv[]) {
+  
     char command[N_CHAR];
+    char args[N_CHAR];
+    
+    if(argc == 2) {
+        read_file(argv[1]);
+        return 0;
+    }
 
     while (1) {
         printf("icsh $ ");
         if(fgets(command, N_CHAR, stdin) != NULL){
-            run_command(command);
+            run_command(command, 0);
         }
     }
+    
     return 0;
 }
