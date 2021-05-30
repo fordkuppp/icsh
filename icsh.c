@@ -7,8 +7,10 @@
 
 # define N_CHAR 256
 
+// Initialize with null character
 char prev_command[N_CHAR] = {'\0'};  
 
+// Initialize all required words buffer
 char echo_trigger[] = "echo";
 char exit_trigger[] = "exit";
 char prev_trigger[] = "!!";
@@ -44,13 +46,36 @@ int process_command(char command[], int script_mode) {
             }  
         } 
         else {
-            printf("bad command\n");
+            int status;
+            int pid;
+            int i = 0;
+            char * prog_arv[N_CHAR];
+            prog_arv[i] = token;
+            while(token != NULL) {
+                token = strtok(NULL, delimiter);
+                prog_arv[++i] = token;
+            }
+            prog_arv[i+1] = NULL;
+
+            if((pid=fork()) < 0) {
+                perror("Fork failed");
+            } 
+            if(!pid) {
+                if(execvp(prog_arv[0], prog_arv) == -1) {
+                    printf("bad command \n");
+                }
+                return 1;
+            }
+            if (pid) {
+                waitpid(pid, NULL, 0);
+            }
         }
         if(strcmp(prev_command, command)) strcpy(prev_command, command);
     }
 
     return 1;
 }
+
 
 int run_command(char command[], int script_mode) {
     command[strcspn(command, "\n")] = 0;
@@ -69,7 +94,6 @@ void read_file(char fileName[]) {
 }
 
 int main(int argc, char *argv[]) {
-  
     char command[N_CHAR];
     char args[N_CHAR];
     
