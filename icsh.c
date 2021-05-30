@@ -10,6 +10,8 @@
 #include <ctype.h>
 
 # define N_CHAR 256
+# define N_PID 4194304
+# define N_JOBS 1000
 
 char prev_command[N_CHAR] = {'\0'};  
 
@@ -17,11 +19,94 @@ char shell_comment[] = "##";
 const char delimiter[] = " ";
 int fg_pid = 0;
 int prev_exit_status = 0;
+int saved_stdout; 
 
-int process_command(char command[], int script_mode) {
+char *trim_ws(char *command){
+    char *tmp = (char *) malloc(strlen(command) + 1);
+    strcpy(tmp, command);
+    char *end;
+
+    while (isspace((unsigned char)*tmp)) 
+        tmp++;
+    if(*tmp == 0)
+        return tmp;
+    end = tmp + strlen(tmp) - 1;
+    while (end > tmp && isspace((unsigned char)*end))
+        end--;
+    end[1] = '\0';
+    return tmp;
+}
+void redir_out(char *filename) {
+    int fd = open(filename, O_TRUNC | O_CREAT | O_WRONLY, 0666);
+    if ((fd <= 0)) {
+        fprintf (stderr, "Couldn't open a file\n");
+        exit (errno);
+    }
+    dup2(fd, STDOUT_FILENO); 
+    dup2(fd, STDERR_FILENO);
+    close(fd);
+}
+
+void redir_in(char *filename) {
+    int in = open(filename, O_RDONLY);
+    if ((in <= 0)) {
+        fprintf (stderr, "Couldn't open a file\n");
+        exit (errno);
+    }
+    dup2 (in, STDIN_FILENO);
+    close(in);
+}
+
+char* check_io_redir(char command[]) {
+    if(strchr(command, '>')  != NULL) 
+        return ">";
+    else if (strchr(command, '<') != NULL)
+        return "<";
+    return NULL;
+}
+
+char* process_redir(char command[]) {
+    char* redir_char = check_io_redir(command);
+    if(redir_char != NULL) {
+        char *token;
+        char *tmp = (char *) malloc(strlen(command) + 1);
+        strcpy(tmp, command);
+
+        token = strtok(tmp, redir_char);
+        char *parsed_command = trim_ws(token);
+        token = strtok(NULL, redir_char);
+        char *filename = trim_ws(token);
+
+        if(strchr(redir_char, '>')) 
+            redir_out(filename);
+        else if (strchr(redir_char, '<')) 
+            redir_in(filename);
+        
+        free(tmp);
+        return parsed_command;
+    }
+    free(redir_char);
+    return command;
+}
+
+int is_bgp(char command[]){
+    if(command && *command && command[strlen(command) - 1] == '&') {
+        command[strlen(command) - 1] = '\0';
+        char *end;
+        end = command + strlen(command) - 1;
+        while(end > command && isspace((unsigned char)*end))
+            end--;
+        end[1] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+void process_command(char command[], int script_mode) {
     char *token;
     char *tmp = (char *) malloc(strlen(command) + 1);
 
+    int bgp = is_bgp(command);
     strcpy(tmp, command);
     token = strtok(tmp, delimiter);
 
@@ -68,29 +153,40 @@ int process_command(char command[], int script_mode) {
                 perror("Fork failed");
             } 
             if(!pid) {
-                if(execvp(prog_arv[0], prog_arv) == -1) {
-                    printf("bad command \n");
+                command = process_redir(command);
+                int i = 0;
+                char * prog_arv[N_CHAR];
+                token = strtok(command, delimiter);
+                prog_arv[i] = token;
+                while(token != NULL) {
+                    token = strtok(NULL, delimiter);
+                    prog_arv[++i] = token;
                 }
-                return 1;
+                prog_arv[i+1] = NULL;
+                execvp(prog_arv[0], prog_arv);
+                if (execvp(prog_arv[0], prog_arv) == -1)
+                    printf("bad command \n");
             }
             if (pid) {
+                waitpid(pid,NULL,0);
                 fg_pid = pid;
-                waitpid(pid, &status, 0);
+                waitpid(fg_pid, &status, 0);
                 prev_exit_status = WEXITSTATUS(status);
                 fg_pid = 0;
             }
         }
-        if(strcmp(prev_command, command)) strcpy(prev_command, command);
+        if(strcmp(prev_command, command)) 
+            strcpy(prev_command, command);
     }
-    return 1;
+    free(tmp);
+    dup2(saved_stdout, 1);
 }
 
 
 int run_command(char command[], int script_mode) {
     command[strcspn(command, "\n")] = 0;
-    if(command[0] != 0 && strncmp(command, shell_comment, strlen(shell_comment))) {
-        return process_command(command, script_mode);
-    }
+    if(command[0] != 0 && strncmp(command, shell_comment, strlen(shell_comment)))
+        process_command(command, script_mode);
     return 1;
 }
 
@@ -103,15 +199,16 @@ void read_file(char fileName[]) {
 }
 
 void fg_handler() {
-    if(fg_pid != 0) {
+    if(fg_pid != 0)
         kill(fg_pid, SIGINT);
-    }
+    else printf("\n");
 }
 
 void stop_handler() {
-    if(fg_pid != 0) {
+    if(fg_pid != 0) 
         kill(fg_pid, SIGTSTP);
-    }
+    else printf("\n");
+
 }
 
 void init_sas() {
@@ -130,7 +227,10 @@ void init_sas() {
 }
 
 int main(int argc, char *argv[]) {
+    ppid = getpid();
     init_sas();
+    saved_stdout = dup(STDOUT_FILENO);
+
     char command[N_CHAR];
     char args[N_CHAR];
     
@@ -138,7 +238,6 @@ int main(int argc, char *argv[]) {
         read_file(argv[1]);
         return 0;
     }
-
     while (1) {
         printf("icsh $ ");
         if(fgets(command, N_CHAR, stdin) != NULL){
